@@ -15,8 +15,12 @@ for %%f in (*.c) do (
     echo gcc %%f -o bin/%%~nf.exe >> %compiledir%\script.sh
 )
 
- C:\cygwin64\bin\bash --login -i -c "dos2unix /home/compilation/script.sh && sh /home/compilation/script.sh"
+for %%f in (*.h) do (
+    xcopy /y %%f %compiledir%
+)
 
- move %compiledir%\bin\* bin
+C:\cygwin64\bin\bash --login -i -c "dos2unix /home/compilation/script.sh && sh /home/compilation/script.sh"
 
- rmdir /s /q %compiledir%
+move %compiledir%\bin\* bin
+
+rmdir /s /q %compiledir%
