@@ -10,7 +10,7 @@
 
 void handle_error(const char* message)
 {
-    printf("An error occured: %s", message);
+    printf("An error occured: %s\n", message);
     exit(0);
 }
 
@@ -66,6 +66,18 @@ int receive_int(int socket)
     }
 }
 
+void write_int(int server_socket, int number)
+{
+    int result = write(server_socket, &number, sizeof(int));
+    if (result < 0)
+        handle_error("Cannot write number to server socket");
+}
+
+char get_xo(int player)
+{
+    return player ? 'X' : 'O';
+}
+
 int main(int argc, char* argv[])
 {
     if (argc < 3)
@@ -83,8 +95,9 @@ int main(int argc, char* argv[])
     printf("Tic-Tac-Toe\n");
 
     int id = receive_int(server_socket);
-
-    while(1)
+    
+    int game_over = 0, player, move;
+    while (!game_over)
     {
         int message = receive_int(server_socket);
         switch(message)
@@ -92,15 +105,47 @@ int main(int argc, char* argv[])
             case WAIT:
                 printf("Waiting for second player to join...\n");
                 break;
+            case NOT_YOUR_TURN:
+                printf("Wait for your opponent to make a turn\n");
+                break;
             case START:
                 printf("Game is starting!\n");
-                printf("You are %c's\n", id ? 'X' : 'O');
+                printf("You are %c's\n", get_xo(id));
                 draw_board(board);
+                break;
+            case UPDATE:
+                player = receive_int(server_socket);
+                move = receive_int(server_socket);
+                board[move / 3][move % 3] = get_xo(player);
+                printf("Move made, board afterwards:\n");
+                draw_board(board);
+                break;
+            case INVALID:
+                printf("Invalid move!\n");
+            case TURN:
+                printf("Make your move, 0-8: ");
+                int move;
+                scanf("%d", &move);
+                write_int(server_socket, move);
+                break;
+            case DRAW:
+                printf("Game over. It's a draw!");
+                game_over = 1;
+                break;
+            case WON:
+                printf("Congratulations, you've won!");
+                game_over = 1;
+                break;
+            case LOST:
+                printf("You've lost :(");
+                game_over = 1;
                 break;
             default:
                 handle_error("Unknown server signal");
         }
     }
 
+    close(server_socket);
 
+    return 0;
 }

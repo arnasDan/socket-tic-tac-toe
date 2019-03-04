@@ -10,7 +10,7 @@
 
 void handle_error(const char* message)
 {
-    printf("An error occured: %s", message);
+    printf("An error occured: %s\n", message);
     pthread_exit(NULL);
 }
 
@@ -18,13 +18,25 @@ void write_status(int client_socket, int status_code)
 {
     int result = write(client_socket, &status_code, sizeof(int));
     if (result < 0)
+    {
+        printf("Message was: %d\n", status_code);
         handle_error("Cannot write status to client socket");
+    }
+        
+
 }
 
 void write_to_clients(int* clients, int status_code)
 {
     write_status(clients[0], status_code);
     write_status(clients[1], status_code);
+}
+
+int receive_int(int socket)
+{
+    int message;
+    recv(socket, &message, sizeof(int), 0);
+    return message;
 }
  
 int setup_server(int port)
@@ -47,24 +59,90 @@ int setup_server(int port)
     if (bind(socket_no, (struct sockaddr*) &server_address, sizeof(server_address)) < 0)
         handle_error("Cannot bind listener socket");
     
-    printf("Now listening on %d", port);
-    
+    printf("Now listening on %d\n", port);
     return socket_no;
+}
+
+int handle_move(char board[][3], int move, int player)
+{
+    board[move / 3][move % 3] = player ? 'X' : 'O';
+    int row = move / 3;
+    int col = move % 3;
+    printf("Player %d made move %d (row: %d, col: %d) \n", player, move, row, col);
+    printf("Board after move:\n");
+    for (int i = 0; i < 3; i++)
+    {
+        for (int j = 0; j < 3; j++)
+            if (board[i][j] != ' ')
+                printf("%c ", board[i][j]);
+            else
+                printf("%c ", '-');
+        printf("\n");
+    }
+    int row_win =
+        board[row][0] == board[row][1] &&
+        board[row][0] == board[row][2];
+    int column_win =
+        board[0][col] == board[1][col] &&
+        board[0][col] == board[2][col];
+    int diagonal_win =
+        (
+            (board[0][0] == board[1][1] && board[0][0] == board[2][2] && board[0][0] != ' ') ||
+            (board[1][1] == board[0][2] && board[1][1] == board[2][0] && board[1][1] != ' ')
+        );
+    printf("row_win=%d column_win=%d, diagonal_win=%d\n", row_win, column_win, diagonal_win);
+    return row_win || column_win || diagonal_win;
 }
 
 void* run_game(void* thread_context)
 {
     int* clients = (int*) thread_context;
 
-    int game_over = 1;
+    int game_over = 0, player_turn = 1, turn_count = 0, move;
+
+    char board[3][3] = { {' ', ' ', ' '},
+                        {' ', ' ', ' '}, 
+                        {' ', ' ', ' '} };
     
     write_to_clients(clients, START);
 
-    while (!game_over)
+    while (!game_over && turn_count <= 8)
     {
+        write_status(clients[!player_turn], NOT_YOUR_TURN);
+        write_status(clients[player_turn], TURN);
+        
+        //loop until valid move is provided
+        while (1)
+        {
+            move = receive_int(clients[player_turn]);
+            if (move == -1 || (move >= 0 && move <= 8 && board[move / 3][move % 3] == ' '))
+                break;
+            else
+                write_status(clients[player_turn], INVALID);
+        }
+        if (move == -1)
+            break;
+        
+        //inform about move
+        write_to_clients(clients, UPDATE);
+        write_to_clients(clients, player_turn);
+        write_to_clients(clients, move);
 
+        turn_count++;
+        
+        game_over = handle_move(board, move, player_turn);
+
+        player_turn = !player_turn;
     }
 
+    if (game_over && move != -1)
+    {
+        write_status(clients[!player_turn], WON);
+        write_status(clients[player_turn], LOST);
+    }
+    else if (turn_count == 8)
+        write_to_clients(clients, DRAW);
+    
     close(clients[0]);
     close(clients[1]);
     free(clients);
@@ -116,7 +194,9 @@ int main (int argc, char* argv[])
             printf("Failed to create thread, error code %d", result);
             exit(-1);
         }
+        number_connected = 0;
     }
 
     close(listener_socket);
+    return 0;
 }
