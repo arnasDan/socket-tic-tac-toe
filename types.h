@@ -1,0 +1,1 @@
+enum status_message {DRAW, WON, LOST, WAIT, START, TURN, INVALID, NOT_YOUR_TURN};
