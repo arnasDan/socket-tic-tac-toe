@@ -1,16 +1,27 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
+
 #include "types.h"
+
+#ifdef _WIN32
+    #ifndef _WIN32_WINNT
+        #define _WIN32_WINNT 0x0501
+     #endif
+    #include <winsock2.h>
+    #include <Ws2tcpip.h>
+#else
+    #include <sys/socket.h>
+    #include <sys/socket.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <unistd.h>
+#endif
 
 void handle_error(const char* message)
 {
-    printf("An error occured: %s\n", message);
+    fprintf(stderr, "An error occured: %s\n", message);
     exit(0);
 }
 
@@ -27,25 +38,30 @@ int connect_to_server(char* hostname, int port)
 {
     struct sockaddr_in server_address;
     struct hostent *server;
- 
+
     int socket_no = socket(AF_INET, SOCK_STREAM, 0);
-	
-    if (socket_no < 0) 
-        handle_error("ERROR opening socket for server.");
-	
+
+    #ifdef _WIN32
+        if (socket_no == INVALID_SOCKET)
+            handle_error("Cannot open socket for listening");
+    #else
+        if (socket_no < 0)
+            handle_error("Cannot open socket for listening");
+    #endif
+
     server = gethostbyname(hostname);
-	
+
     if (server == NULL)
         handle_error("No such host");
-	
+
 	memset(&server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
     memmove(server->h_addr, &server_address.sin_addr.s_addr, server->h_length);
-    server_address.sin_port = htons(port); 
+    server_address.sin_port = htons(port);
 
-    if (connect(socket_no, (struct sockaddr*) &server_address, sizeof(server_address)) < 0) 
+    if (connect(socket_no, (struct sockaddr*) &server_address, sizeof(server_address)) < 0)
         handle_error("Cannot connect to server");
-    
+
     return socket_no;
 }
 
@@ -53,23 +69,17 @@ int receive_int(int socket)
 {
     int message;
     int result = recv(socket, &message, sizeof(message), 0);
-    switch(result)
-    {
-        case -1:
-            handle_error("Cannot read from server socket");
-            break;
-        case 0:
-            handle_error("Connection closed");
-            break;
-        default:
-            return message;
-    }
+    if (result == -1 || result != sizeof(int))
+        handle_error("Cannot read from server socket");
+    else if (result == 0)
+        handle_error("Connection closed");
+    return message;
 }
 
 void write_int(int server_socket, int number)
 {
     int result = write(server_socket, &number, sizeof(int));
-    if (result < 0)
+    if (result < 0 || result != sizeof(int))
         handle_error("Cannot write number to server socket");
 }
 
@@ -85,17 +95,23 @@ int main(int argc, char* argv[])
         printf("Usage: %s host port\n", argv[0]);
         exit(0);
     }
-    
+
+    #ifdef _WIN32
+        WSADATA wsa_data;
+        if (WSAStartup(MAKEWORD(1,1), &wsa_data) != 0)
+            handle_error("Error initialising winsock");
+    #endif
+
     int server_socket = connect_to_server(argv[1], atoi(argv[2]));
 
     char board[3][3] = { {' ', ' ', ' '},
-                         {' ', ' ', ' '}, 
+                         {' ', ' ', ' '},
                          {' ', ' ', ' '} };
-    
+
     printf("Tic-Tac-Toe\n");
 
     int id = receive_int(server_socket);
-    
+
     int game_over = 0, player, move;
     while (!game_over)
     {
@@ -145,7 +161,15 @@ int main(int argc, char* argv[])
         }
     }
 
-    close(server_socket);
+    #ifdef _WIN32
+        closesocket(server_socket);
+    #else
+        close(server_socket);
+    #endif
 
+    #ifdef _WIN32
+        if (WSACleanup() != 0)
+            handle_error("Error cleaning up winsock");
+    #endif
     return 0;
 }

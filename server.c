@@ -1,28 +1,40 @@
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/types.h> 
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <sys/types.h>
+
 #include "types.h"
+
+#ifdef _WIN32
+    #ifndef _WIN32_WINNT
+        #define _WIN32_WINNT 0x0501
+     #endif
+    #include <winsock2.h>
+    #include <Ws2tcpip.h>
+    #include "pthread/pthread.h"
+#else
+    #include <sys/socket.h>
+    #include <sys/socket.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <unistd.h>
+#endif
+
 
 void handle_error(const char* message)
 {
-    printf("An error occured: %s\n", message);
+    fprintf(stderr, "An error occured: %s\n", message);
     pthread_exit(NULL);
 }
 
 void write_status(int client_socket, int status_code)
 {
     int result = write(client_socket, &status_code, sizeof(int));
-    if (result < 0)
+    if (result < 0 || result != sizeof(int))
     {
         printf("Message was: %d\n", status_code);
         handle_error("Cannot write status to client socket");
     }
-        
 
 }
 
@@ -35,19 +47,28 @@ void write_to_clients(int* clients, int status_code)
 int receive_int(int socket)
 {
     int message;
-    recv(socket, &message, sizeof(int), 0);
+    int result = recv(socket, &message, sizeof(message), 0);
+    if (result == -1 || result != sizeof(int))
+        handle_error("Cannot read from server socket");
+    else if (result == 0)
+        handle_error("Connection closed");
     return message;
 }
- 
+
 int setup_server(int port)
-{ 
+{
     int socket_no;
     struct sockaddr_in server_address;
-    
+
     //             domain=IPv4, type=TCP,    protocol=default
     socket_no = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_no < 0)
-        handle_error("Cannot open socket for listening");
+    #ifdef _WIN32
+        if (socket_no == INVALID_SOCKET)
+            handle_error("Cannot open socket for listening");
+    #else
+        if (socket_no < 0)
+            handle_error("Cannot open socket for listening");
+    #endif
 
     //setup server info
     memset(&server_address, 0, sizeof(server_address));
@@ -58,7 +79,7 @@ int setup_server(int port)
     //Bind info to previously opened socket
     if (bind(socket_no, (struct sockaddr*) &server_address, sizeof(server_address)) < 0)
         handle_error("Cannot bind listener socket");
-    
+
     printf("Now listening on %d\n", port);
     return socket_no;
 }
@@ -101,16 +122,16 @@ void* run_game(void* thread_context)
     int game_over = 0, player_turn = 1, turn_count = 0, move;
 
     char board[3][3] = { {' ', ' ', ' '},
-                        {' ', ' ', ' '}, 
+                        {' ', ' ', ' '},
                         {' ', ' ', ' '} };
-    
+
     write_to_clients(clients, START);
 
     while (!game_over && turn_count <= 8)
     {
         write_status(clients[!player_turn], NOT_YOUR_TURN);
         write_status(clients[player_turn], TURN);
-        
+
         //loop until valid move is provided
         while (1)
         {
@@ -122,14 +143,14 @@ void* run_game(void* thread_context)
         }
         if (move == -1)
             break;
-        
+
         //inform about move
         write_to_clients(clients, UPDATE);
         write_to_clients(clients, player_turn);
         write_to_clients(clients, move);
 
         turn_count++;
-        
+
         game_over = handle_move(board, move, player_turn);
 
         player_turn = !player_turn;
@@ -142,9 +163,15 @@ void* run_game(void* thread_context)
     }
     else if (turn_count == 8)
         write_to_clients(clients, DRAW);
-    
-    close(clients[0]);
-    close(clients[1]);
+
+    #ifdef _WIN32
+        closesocket(clients[0]);
+        closesocket(clients[1]);
+    #else
+        close(clients[0]);
+        close(clients[1]);
+    #endif
+
     free(clients);
 
     pthread_exit(NULL);
@@ -152,11 +179,17 @@ void* run_game(void* thread_context)
 
 int main (int argc, char* argv[])
 {
-    if (argc < 2) 
+    if (argc < 2)
     {
         printf("A port must be specified");
         exit(1);
     }
+
+    #ifdef _WIN32
+        WSADATA wsa_data;
+        if (WSAStartup(MAKEWORD(1,1), &wsa_data) != 0)
+            handle_error("Error initialising winsock");
+    #endif
 
     int listener_socket = setup_server(atoi(argv[1]));
     int number_connected = 0;
@@ -181,7 +214,7 @@ int main (int argc, char* argv[])
 
             if (client_sockets[number_connected] < 0)
                 handle_error("Cannot accept client connection");
-            
+
             number_connected++;
             if (number_connected == 1)
                 write_status(client_sockets[0], WAIT);
@@ -197,6 +230,15 @@ int main (int argc, char* argv[])
         number_connected = 0;
     }
 
-    close(listener_socket);
+    #ifdef _WIN32
+        closesocket(listener_socket);
+    #else
+        close(listener_socket);
+    #endif
+
+    #ifdef _WIN32
+        if (WSACleanup() != 0)
+            handle_error("Error cleaning up");
+    #endif
     return 0;
 }
